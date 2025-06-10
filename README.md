@@ -17,6 +17,22 @@ to CSV/HTML).
 
 - [nba_api_notebook.ipynb](NBADATA/nba_api_notebook.ipynb)
 
-Both projects demonstrate end-to-end data ingestion, transformation with pandas, and
+These notebooks demonstrate end-to-end data ingestion, transformation with pandas, and
 rich interactive visualization (Plotly or Matplotlib) to deliver clear, insight-driven
-dashboards for financial and sports analytics.
+dashboards across financial, sports, and web data domains.
+
+## Web Data Acquisition and Visualization (WEBDATA folder)
+
+This collection of notebooks, labs, and reference PDFs showcases web-based data
+ingestion and interactive visualization workflows. Topics include REST API access with
+`requests`, HTML scraping with `BeautifulSoup` and pandas, and building interactive
+dashboards with Plotly.
+
+- [requests_python_notebook.ipynb](WEBDATA/requests_python_notebook.ipynb)
+- [web_scraping_tutorial.ipynb](WEBDATA/web_scraping_tutorial.ipynb)
+- [pandas_web_scraping_notebook.ipynb](WEBDATA/pandas_web_scraping_notebook.ipynb)
+- [fancy_interactive_viz_notebook.ipynb](WEBDATA/fancy_interactive_viz_notebook.ipynb)
+- [practice_project.ipynb](WEBDATA/practice_project.ipynb)
+
+Raw datasets for scraping exercises are located in `WEBDATA/content` (e.g.,
+`WEBDATA/content/ai_job_dataset.csv`).
