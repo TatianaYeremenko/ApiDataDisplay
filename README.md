@@ -1,3 +1,6 @@
+Both projects demonstrate end-to-end api data ingestion, transformation with pandas, and
+rich interactive visualization (Plotly or Matplotlib)
+
 ## Bitcoin Price Analysis (BITCOIN folder)
 
 This notebook (“Bitcoin Price Analysis with CoinGecko API”) fetches the last 30 days of
@@ -17,6 +20,4 @@ to CSV/HTML).
 
 - [nba_api_notebook.ipynb](NBADATA/nba_api_notebook.ipynb)
 
-Both projects demonstrate end-to-end data ingestion, transformation with pandas, and
-rich interactive visualization (Plotly or Matplotlib) to deliver clear, insight-driven
-dashboards for financial and sports analytics.
+
