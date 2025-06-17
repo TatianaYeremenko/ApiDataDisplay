@@ -1,35 +1,42 @@
 #!/usr/bin/env python3
 """
 NBA Team Game Results Visualizer with HTML Output
+Uses real NBA data for all teams with balanced home/away comparison
 """
 
 from nba_api.stats.endpoints import teamgamelog
 from nba_api.stats.static import teams
 from datetime import datetime, timedelta
 import pandas as pd
-import plotly.express as px
 import webbrowser
 import os
+import json
+import time
 
 # CHANGE THIS VARIABLE TO VIEW DIFFERENT TEAMS
 team_name = "Golden State Warriors"
 
-def get_team_games(team_name):
+def get_team_games(team_name, show_progress=True):
     """
     Get game results for any NBA team from the last 6 months
-    Args:
-        team_name (str): Full team name (e.g., "Golden State Warriors", "Toronto Raptors")
-    Returns:
-        DataFrame: Recent games data or None if error
     """
     try:
         # Get team ID
-        team_info = teams.find_teams_by_full_name(team_name)[0]
+        team_matches = teams.find_teams_by_full_name(team_name)
+        if not team_matches:
+            if show_progress:
+                print(f"Team '{team_name}' not found. Skipping...")
+            return None
+            
+        team_info = team_matches[0]
         team_id = team_info['id']
         
         # Calculate date 6 months ago
         six_months_ago = datetime.now() - timedelta(days=180)
-        season = "2024-25"  # Current NBA season
+        season = "2024-25"
+        
+        if show_progress:
+            print(f"Fetching data for {team_name}...")
         
         # Get team game log
         gamelog = teamgamelog.TeamGameLog(
@@ -41,243 +48,362 @@ def get_team_games(team_name):
         # Get games data
         games_df = gamelog.get_data_frames()[0]
         
-        # Convert GAME_DATE to datetime with explicit format
-        games_df['GAME_DATE'] = pd.to_datetime(games_df['GAME_DATE'], format='%b %d, %Y')
+        if games_df.empty:
+            if show_progress:
+                print(f"No games found for {team_name} in {season} season")
+            return None
+        
+        # Convert GAME_DATE to datetime
+        try:
+            games_df['GAME_DATE'] = pd.to_datetime(games_df['GAME_DATE'])
+        except:
+            games_df['GAME_DATE'] = pd.to_datetime(games_df['GAME_DATE'], format='%Y-%m-%d')
         
         # Filter games from last 6 months
         recent_games = games_df[games_df['GAME_DATE'] >= six_months_ago]
         
+        if recent_games.empty:
+            if show_progress:
+                print(f"No recent games found for {team_name} in the last 6 months")
+            return None
+        
         # Sort by date (most recent first)
         recent_games = recent_games.sort_values('GAME_DATE', ascending=False)
         
-        # Calculate home/away records
-        home_games = recent_games[recent_games['MATCHUP'].str.contains('vs')]
-        away_games = recent_games[recent_games['MATCHUP'].str.contains('@')]
-        home_record = f"{len(home_games[home_games['WL'] == 'W'])}-{len(home_games[home_games['WL'] == 'L'])}"
-        away_record = f"{len(away_games[away_games['WL'] == 'W'])}-{len(away_games[away_games['WL'] == 'L'])}"
-        
-        # Display results
-        print(f"{team_name} - Last 6 Months Game Results")
-        print(f"{'='*60}")
-        print(f"Total Games: {len(recent_games)}")
-        print(f"Overall Record: {recent_games['WL'].value_counts().get('W', 0)}-{recent_games['WL'].value_counts().get('L', 0)}")
-        print(f"Home Record: {home_record} | Away Record: {away_record}")
-        print(f"{'='*60}")
-        
-        # Show game details with Home/Away indicator
-        for _, game in recent_games.iterrows():
-            date = game['GAME_DATE'].strftime('%m/%d/%Y')
-            opponent = game['MATCHUP'].split(' ')[-1]
-            result = "W" if game['WL'] == 'W' else "L"
-            score = f"{game['PTS']}-{game['OPP_PTS']}" if 'OPP_PTS' in game else f"{game['PTS']} pts"
+        if show_progress:
+            # Calculate home/away records for display
+            home_games = recent_games[recent_games['MATCHUP'].str.contains('vs', na=False)]
+            away_games = recent_games[recent_games['MATCHUP'].str.contains('@', na=False)]
             
-            # Determine Home/Away
-            location = "HOME" if 'vs' in game['MATCHUP'] else "AWAY"
+            home_wins = len(home_games[home_games['WL'] == 'W'])
+            home_losses = len(home_games[home_games['WL'] == 'L'])
+            away_wins = len(away_games[away_games['WL'] == 'W'])
+            away_losses = len(away_games[away_games['WL'] == 'L'])
             
-            print(f"{date} | {result} | {location} | vs {opponent} | {score}")
+            total_wins = recent_games['WL'].value_counts().get('W', 0)
+            total_losses = recent_games['WL'].value_counts().get('L', 0)
+            
+            print(f"  Total Games: {len(recent_games)} | Record: {total_wins}-{total_losses}")
+            print(f"  Home: {home_wins}-{home_losses} ({len(home_games)} games) | Away: {away_wins}-{away_losses} ({len(away_games)} games)")
         
         return recent_games
         
     except Exception as e:
-        print(f"Error fetching data for {team_name}: {e}")
+        if show_progress:
+            print(f"Error fetching data for {team_name}: {e}")
         return None
 
-def visualize_team_games(team_data, team_name):
-    """Create interactive HTML chart with team selector dropdown"""
+def process_team_data(team_data):
+    """Convert team data to JavaScript format"""
     if team_data is None:
-        print(f"No data available for {team_name}")
-        return
+        return []
+    
+    processed_data = []
+    for _, game in team_data.iterrows():
+        processed_data.append({
+            'GAME_DATE': game['GAME_DATE'].strftime('%Y-%m-%d'),
+            'PTS': int(game['PTS']) if pd.notna(game['PTS']) else 0,
+            'HOME_AWAY': 'Home' if 'vs' in str(game['MATCHUP']) else 'Away',
+            'WL': game['WL']
+        })
+    
+    return processed_data
+
+def get_all_teams_data():
+    """Fetch real NBA data for all teams"""
+    print("Fetching real NBA data for all teams...")
+    print("This may take a few minutes due to API rate limits...")
+    print("=" * 60)
+    
+    all_teams_data = {}
+
+    # nba_teams= ["Golden State Warriors","Toronto Raptors"]
     
     # Get list of all NBA teams
-    all_teams = [team['full_name'] for team in teams.get_teams()]
+    try:
+        nba_teams = teams.get_teams()
+    except:
+        print("Error getting NBA teams list. Using fallback list.")
+        nba_teams = [
+            {'full_name': 'Atlanta Hawks'}, {'full_name': 'Boston Celtics'},
+            {'full_name': 'Brooklyn Nets'}, {'full_name': 'Charlotte Hornets'},
+            {'full_name': 'Chicago Bulls'}, {'full_name': 'Cleveland Cavaliers'},
+            {'full_name': 'Dallas Mavericks'}, {'full_name': 'Denver Nuggets'},
+            {'full_name': 'Detroit Pistons'}, {'full_name': 'Golden State Warriors'},
+            {'full_name': 'Houston Rockets'}, {'full_name': 'Indiana Pacers'},
+            {'full_name': 'LA Clippers'}, {'full_name': 'Los Angeles Lakers'},
+            {'full_name': 'Memphis Grizzlies'}, {'full_name': 'Miami Heat'},
+            {'full_name': 'Milwaukee Bucks'}, {'full_name': 'Minnesota Timberwolves'},
+            {'full_name': 'New Orleans Pelicans'}, {'full_name': 'New York Knicks'},
+            {'full_name': 'Oklahoma City Thunder'}, {'full_name': 'Orlando Magic'},
+            {'full_name': 'Philadelphia 76ers'}, {'full_name': 'Phoenix Suns'},
+            {'full_name': 'Portland Trail Blazers'}, {'full_name': 'Sacramento Kings'},
+            {'full_name': 'San Antonio Spurs'}, {'full_name': 'Toronto Raptors'},
+            {'full_name': 'Utah Jazz'}, {'full_name': 'Washington Wizards'}
+        ]
+    
+    successful_teams = 0
+    for i, team in enumerate(nba_teams):
+        team_full_name = team['full_name']
+        
+        # Get team data
+        team_data = get_team_games(team_full_name, show_progress=True)
+        
+        if team_data is not None:
+            all_teams_data[team_full_name] = process_team_data(team_data)
+            successful_teams += 1
+        
+        # Add delay to respect NBA API rate limits
+        if i < len(nba_teams) - 1:  # Don't delay after last team
+            time.sleep(0.6)  # 600ms delay between requests
+        
+        # Progress update
+        print(f"Progress: {i + 1}/{len(nba_teams)} teams processed")
+    
+    print("=" * 60)
+    print(f"Successfully fetched data for {successful_teams} teams")
+    return all_teams_data
+
+def visualize_team_games(all_teams_data, initial_team):
+    """Create interactive HTML chart with real data for all teams"""
+    
+    # Get sorted list of teams
+    available_teams = sorted(all_teams_data.keys())
+    
+    if initial_team not in available_teams and available_teams:
+        initial_team = available_teams[0]
+        print(f"Initial team not available, using {initial_team} instead")
     
     html_content = f"""
     <!DOCTYPE html>
     <html>
     <head>
-        <title>NBA Team Analysis</title>
+        <title>NBA Team Analysis - Real Data for All Teams</title>
         <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
         <style>
-            body {{ font-family: Arial, sans-serif; margin: 20px; }}
-            .controls {{ margin: 20px 0; }}
+            body {{ 
+                font-family: Arial, sans-serif; 
+                margin: 20px; 
+                background-color: #f5f5f5;
+            }}
+            .container {{
+                max-width: 1200px;
+                margin: 0 auto;
+                background-color: white;
+                padding: 20px;
+                border-radius: 10px;
+                box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            }}
+            .controls {{ 
+                margin: 20px 0; 
+                padding: 15px;
+                background-color: #f8f9fa;
+                border-radius: 5px;
+            }}
+            .controls select {{
+                padding: 8px 12px;
+                font-size: 16px;
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                background-color: white;
+            }}
             .stats {{ 
-                background-color: #f8f9fa; 
+                background-color: #e3f2fd; 
                 padding: 15px; 
                 border-radius: 5px; 
                 margin: 20px 0; 
-                border-left: 4px solid #007bff; 
+                border-left: 4px solid #2196f3; 
                 font-weight: bold;
+            }}
+            .info {{
+                background-color: #d4edda;
+                color: #155724;
+                padding: 10px;
+                border-radius: 4px;
+                border-left: 4px solid #28a745;
+                margin: 10px 0;
+            }}
+            .real-data {{
+                background-color: #fff3cd;
+                color: #856404;
+                padding: 10px;
+                border-radius: 4px;
+                border-left: 4px solid #ffc107;
+                margin: 10px 0;
+            }}
+            #chart {{
+                margin-top: 20px;
             }}
         </style>
     </head>
     <body>
-        <h1>NBA Team Performance Analysis</h1>
-        <div class="controls">
-            <label for="teamSelect">Select Team: </label>
-            <select id="teamSelect" onchange="updateChart()">
-                {"".join(f'<option value="{team}" {"selected" if team == team_name else ""}>{team}</option>' for team in all_teams)}
-            </select>
-            <span id="loading">Loading...</span>
+        <div class="container">
+            <h1>NBA Team Performance Analysis</h1>
+            <h2>Real NBA Data - Balanced Home vs Away Comparison</h2>
+            
+            <div class="controls">
+                <label for="teamSelect">Select Team: </label>
+                <select id="teamSelect" onchange="updateChart()">
+                    {"".join(f'<option value="{team}" {"selected" if team == initial_team else ""}>{team}</option>' for team in available_teams)}
+                </select>
+            </div>
+            
+            <div class="real-data">
+                <strong>Real NBA Data:</strong> All data is fetched live from the NBA API for the 2024-25 season (last 6 months).
+            </div>
+            
+            <div class="info">
+                <strong>Balanced Analysis:</strong> Uses equal numbers of home and away games for fair statistical comparison.
+            </div>
+            
+            <div id="stats"></div>
+            <div id="chart"></div>
         </div>
-        <div id="stats"></div>
-        <div id="chart"></div>
         
         <script>
-            async function getTeamData(teamName) {{
-                try {{
-                    const response = await fetch(`/api/team/${{encodeURIComponent(teamName)}}`);
-                    return await response.json();
-                }} catch (error) {{
-                    // Fallback - create mock data for demo
-                    return generateMockData(teamName);
-                }}
-            }}
+            // Real NBA data for all teams
+            const allTeamsData = {json.dumps(all_teams_data)};
+            const initialTeam = "{initial_team}";
             
-            function generateMockData(teamName) {{
-                const data = [];
-                const startDate = new Date();
-                startDate.setMonth(startDate.getMonth() - 6);
+            function balanceHomeAwayGames(data) {{
+                const homeGames = data.filter(d => d.HOME_AWAY === 'Home');
+                const awayGames = data.filter(d => d.HOME_AWAY === 'Away');
                 
-                // Special case for Toronto Raptors with actual data
-                if (teamName === 'Toronto Raptors') {{
-                    const games = [
-                        {{date: '2024-12-15', pts: 133, home: true}},
-                        {{date: '2024-12-29', pts: 105, home: true}},
-                        {{date: '2025-01-02', pts: 109, home: true}},
-                        {{date: '2025-01-12', pts: 121, home: true}},
-                        {{date: '2025-01-19', pts: 98, home: true}},
-                        {{date: '2025-01-26', pts: 104, home: true}},
-                        {{date: '2025-02-09', pts: 104, home: true}},
-                        {{date: '2025-02-16', pts: 125, home: true}},
-                        {{date: '2025-02-23', pts: 126, home: true}},
-                        {{date: '2025-03-09', pts: 129, home: true}},
-                        {{date: '2025-03-16', pts: 130, home: true}},
-                        {{date: '2025-03-30', pts: 105, home: true}},
-                        {{date: '2025-04-06', pts: 117, home: true}},
-                        {{date: '2025-04-13', pts: 111, home: true}},
-                        {{date: '2025-04-20', pts: 132, home: true}},
-                        
-                        {{date: '2024-12-08', pts: 93, home: false}},
-                        {{date: '2024-12-22', pts: 92, home: false}},
-                        {{date: '2025-01-05', pts: 84, home: false}},
-                        {{date: '2025-01-09', pts: 122, home: false}},
-                        {{date: '2025-01-16', pts: 101, home: false}},
-                        {{date: '2025-01-23', pts: 108, home: false}},
-                        {{date: '2025-01-30', pts: 104, home: false}},
-                        {{date: '2025-02-02', pts: 115, home: false}},
-                        {{date: '2025-02-06', pts: 130, home: false}},
-                        {{date: '2025-02-13', pts: 131, home: false}},
-                        {{date: '2025-02-20', pts: 106, home: false}},
-                        {{date: '2025-02-27', pts: 121, home: false}},
-                        {{date: '2025-03-02', pts: 119, home: false}},
-                        {{date: '2025-03-06', pts: 118, home: false}},
-                        {{date: '2025-03-20', pts: 147, home: false}},
-                        {{date: '2025-03-23', pts: 127, home: false}},
-                        {{date: '2025-03-27', pts: 121, home: false}},
-                        {{date: '2025-04-03', pts: 110, home: false}},
-                        {{date: '2025-04-10', pts: 86, home: false}},
-                        {{date: '2025-04-16', pts: 122, home: false}}
-                    ];
-                    
-                    return games.map(g => ({{
-                        GAME_DATE: g.date,
-                        PTS: g.pts,
-                        HOME_AWAY: g.home ? 'Home' : 'Away'
-                    }}));
+                // Take equal number of most recent games from each
+                const minGames = Math.min(homeGames.length, awayGames.length);
+                
+                if (minGames === 0) {{
+                    return data;
                 }}
                 
-                for (let i = 0; i < 40; i++) {{
-                    const gameDate = new Date(startDate);
-                    gameDate.setDate(gameDate.getDate() + i * 4);
-                    
-                    const isHome = Math.random() > 0.5;
-                    const baseScore = isHome ? 115 : 110;
-                    const variance = (Math.random() - 0.5) * 40;
-                    
-                    data.push({{
-                        GAME_DATE: gameDate.toISOString().split('T')[0],
-                        PTS: Math.round(baseScore + variance),
-                        HOME_AWAY: isHome ? 'Home' : 'Away'
-                    }});
-                }}
-                return data;
+                // Sort each type by date (most recent first) and take equal amounts
+                homeGames.sort((a, b) => new Date(b.GAME_DATE) - new Date(a.GAME_DATE));
+                awayGames.sort((a, b) => new Date(b.GAME_DATE) - new Date(a.GAME_DATE));
+                
+                const balancedData = [
+                    ...homeGames.slice(0, minGames),
+                    ...awayGames.slice(0, minGames)
+                ];
+                
+                return balancedData.sort((a, b) => new Date(a.GAME_DATE) - new Date(b.GAME_DATE));
             }}
             
-            async function updateChart() {{
+            function updateChart() {{
                 const teamName = document.getElementById('teamSelect').value;
-                const loading = document.getElementById('loading');
                 
-                loading.style.display = 'inline';
+                // Get real data for the selected team
+                const rawData = allTeamsData[teamName] || [];
+                const data = balanceHomeAwayGames(rawData);
                 
-                try {{
-                    const data = await getTeamData(teamName);
-                    
-                    const homeData = data.filter(d => d.HOME_AWAY === 'Home');
-                    const awayData = data.filter(d => d.HOME_AWAY === 'Away');
-                    
-                    const homeAvg = homeData.reduce((sum, d) => sum + d.PTS, 0) / homeData.length;
-                    const awayAvg = awayData.reduce((sum, d) => sum + d.PTS, 0) / awayData.length;
-                    
-                    const traces = [
+                if (data.length === 0) {{
+                    document.getElementById('stats').innerHTML = '<div class="info">No data available for this team.</div>';
+                    document.getElementById('chart').innerHTML = '';
+                    return;
+                }}
+                
+                const homeData = data.filter(d => d.HOME_AWAY === 'Home');
+                const awayData = data.filter(d => d.HOME_AWAY === 'Away');
+                
+                const homeAvg = homeData.length > 0 ? homeData.reduce((sum, d) => sum + d.PTS, 0) / homeData.length : 0;
+                const awayAvg = awayData.length > 0 ? awayData.reduce((sum, d) => sum + d.PTS, 0) / awayData.length : 0;
+                
+                const wins = data.filter(d => d.WL === 'W').length;
+                const losses = data.filter(d => d.WL === 'L').length;
+                
+                const traces = [
+                    {{
+                        x: homeData.map(d => d.GAME_DATE),
+                        y: homeData.map(d => d.PTS),
+                        mode: 'markers+lines',
+                        name: `Home Games (${{homeData.length}})`,
+                        marker: {{ 
+                            color: homeData.map(d => d.WL === 'W' ? 'green' : 'red'),
+                            size: 8, 
+                            symbol: 'circle',
+                            line: {{ color: 'white', width: 1 }}
+                        }},
+                        line: {{ color: 'blue', width: 2 }}
+                    }},
+                    {{
+                        x: awayData.map(d => d.GAME_DATE),
+                        y: awayData.map(d => d.PTS),
+                        mode: 'markers+lines',
+                        name: `Away Games (${{awayData.length}})`,
+                        marker: {{ 
+                            color: awayData.map(d => d.WL === 'W' ? 'lightgreen' : 'pink'),
+                            size: 8, 
+                            symbol: 'triangle-up',
+                            line: {{ color: 'white', width: 1 }}
+                        }},
+                        line: {{ color: 'orange', width: 2 }}
+                    }}
+                ];
+                
+                const layout = {{
+                    title: {{
+                        text: `${{teamName}} - Real NBA Performance Data`,
+                        font: {{ size: 18 }}
+                    }},
+                    xaxis: {{ 
+                        title: 'Game Date',
+                        type: 'date'
+                    }},
+                    yaxis: {{ 
+                        title: 'Points Scored',
+                        range: [75, 145]
+                    }},
+                    template: 'plotly_white',
+                    hovermode: 'closest',
+                    showlegend: true,
+                    shapes: homeData.length > 0 && awayData.length > 0 ? [
                         {{
-                            x: homeData.map(d => d.GAME_DATE),
-                            y: homeData.map(d => d.PTS),
-                            mode: 'markers+lines',
-                            name: 'Home Games',
-                            marker: {{ color: 'blue', size: 8, symbol: 'circle' }},
-                            line: {{ color: 'blue', width: 1, dash: 'dot' }}
+                            type: 'line',
+                            x0: data[0].GAME_DATE,
+                            x1: data[data.length-1].GAME_DATE,
+                            y0: homeAvg,
+                            y1: homeAvg,
+                            line: {{ color: 'blue', width: 2, dash: 'dash' }}
                         }},
                         {{
-                            x: awayData.map(d => d.GAME_DATE),
-                            y: awayData.map(d => d.PTS),
-                            mode: 'markers+lines',
-                            name: 'Away Games',
-                            marker: {{ color: 'orange', size: 8, symbol: 'triangle-up' }},
-                            line: {{ color: 'orange', width: 1, dash: 'dot' }}
+                            type: 'line',
+                            x0: data[0].GAME_DATE,
+                            x1: data[data.length-1].GAME_DATE,
+                            y0: awayAvg,
+                            y1: awayAvg,
+                            line: {{ color: 'orange', width: 2, dash: 'dash' }}
                         }}
-                    ];
-                    
-                    const layout = {{
-                        title: `${{teamName}} - Scoring Results by Date`,
-                        xaxis: {{ title: 'Game Date' }},
-                        yaxis: {{ title: 'Points Scored' }},
-                        template: 'plotly_white',
-                        shapes: [
-                            {{
-                                type: 'line',
-                                x0: data[0].GAME_DATE,
-                                x1: data[data.length-1].GAME_DATE,
-                                y0: homeAvg,
-                                y1: homeAvg,
-                                line: {{ color: 'blue', width: 2, dash: 'dash' }}
-                            }},
-                            {{
-                                type: 'line',
-                                x0: data[0].GAME_DATE,
-                                x1: data[data.length-1].GAME_DATE,
-                                y0: awayAvg,
-                                y1: awayAvg,
-                                line: {{ color: 'orange', width: 2, dash: 'dash' }}
-                            }}
-                        ]
-                    }};
-                    
-                    Plotly.newPlot('chart', traces, layout);
-                    
-                    // Update stats display
-                    const advantage = homeAvg - awayAvg;
-                    const statsHtml = `
-                        <div class="stats">
-                            ${{teamName}}: Home avg ${{homeAvg.toFixed(1)}}, Away avg ${{awayAvg.toFixed(1)}}, Advantage: ${{advantage > 0 ? '+' : ''}}${{advantage.toFixed(1)}}
-                        </div>
-                    `;
-                    document.getElementById('stats').innerHTML = statsHtml;
-                    
-                }} catch (error) {{
-                    console.error('Error updating chart:', error);
-                }} finally {{
-                    loading.style.display = 'none';
-                }}
+                    ] : []
+                }};
+                
+                Plotly.newPlot('chart', traces, layout, {{responsive: true}});
+                
+                // Update stats display
+                const advantage = homeAvg - awayAvg;
+                const homeWins = homeData.filter(d => d.WL === 'W').length;
+                const awayWins = awayData.filter(d => d.WL === 'W').length;
+                const homeLosses = homeData.length - homeWins;
+                const awayLosses = awayData.length - awayWins;
+                const homeRecord = `${{homeWins}}-${{homeLosses}}`;
+                const awayRecord = `${{awayWins}}-${{awayLosses}}`;
+                
+                const balanceStatus = homeData.length === awayData.length ? 
+                    `Balanced: ${{homeData.length}} games each` : 
+                    `Unbalanced: ${{homeData.length}} home vs ${{awayData.length}} away`;
+                
+                const rawHomeGames = rawData.filter(d => d.HOME_AWAY === 'Home').length;
+                const rawAwayGames = rawData.filter(d => d.HOME_AWAY === 'Away').length;
+                
+                const statsHtml = `
+                    <div class="stats">
+                        <strong>${{teamName}}</strong> (Real NBA Data)<br>
+                        <strong>${{balanceStatus}}</strong><br>
+                        Overall Record: ${{wins}}-${{losses}}<br>
+                        Home Record: ${{homeRecord}} | Away Record: ${{awayRecord}}<br><br>
+                        Home Average: ${{homeAvg.toFixed(1)}} pts | Away Average: ${{awayAvg.toFixed(1)}} pts<br>
+                        <strong>Home Advantage: ${{advantage > 0 ? '+' : ''}}${{advantage.toFixed(1)}} points</strong>
+                    </div>
+                `;
+                document.getElementById('stats').innerHTML = statsHtml;
             }}
             
             // Initial chart load
@@ -288,19 +414,35 @@ def visualize_team_games(team_data, team_name):
     """
     
     # Save HTML file
-    filename = "nba_team_analyzer.html"
-    with open(filename, 'w', encoding='utf-8') as f:
-        f.write(html_content)
-    
-    print(f"Interactive HTML page saved as: {filename}")
-    print("You can now select different teams from the dropdown!")
-    
-    # Open in browser
-    webbrowser.open('file://' + os.path.realpath(filename))
+    filename = "nba_real_data_analyzer.html"
+    try:
+        with open(filename, 'w', encoding='utf-8') as f:
+            f.write(html_content)
+        
+        print(f"\nInteractive HTML page saved as: {filename}")
+        print(f"Real NBA data loaded for {len(all_teams_data)} teams")
+        print("Features: Real NBA data with balanced home/away comparison")
+        
+        # Open in browser
+        webbrowser.open('file://' + os.path.realpath(filename))
+        
+    except Exception as e:
+        print(f"Error creating HTML file: {e}")
 
 def main():
-    team_data = get_team_games(team_name)
-    visualize_team_games(team_data, team_name)
+    print("NBA Team Game Results Visualizer")
+    print("Real NBA Data for All Teams")
+    print("=" * 40)
+    
+    # Fetch real data for all teams
+    all_teams_data = get_all_teams_data()
+    
+    if not all_teams_data:
+        print("No team data was successfully fetched. Please check your internet connection and try again.")
+        return
+    
+    # Create visualization with all real data
+    visualize_team_games(all_teams_data, team_name)
 
 if __name__ == "__main__":
     main()
