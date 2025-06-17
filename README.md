@@ -20,6 +20,9 @@ to CSV/HTML).
 These notebooks demonstrate end-to-end data ingestion, transformation with pandas, and
 rich interactive visualization (Plotly or Matplotlib) to deliver clear, insight-driven
 dashboards across financial, sports, and web data domains.
+<img width="959" alt="nba_team_performance" src="https://github.com/user-attachments/assets/50dc473f-7b0c-49fd-9aa1-bf4dd0235269" />
+
+
 
 ## Web Data Acquisition and Visualization (WEBDATA folder)
 
